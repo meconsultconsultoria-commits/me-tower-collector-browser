@@ -1,0 +1,12 @@
+{
+  "name": "me-tower-rastro-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "collect": "node collect.js"
+  },
+  "dependencies": {
+    "playwright": "1.55.0"
+  }
+}
