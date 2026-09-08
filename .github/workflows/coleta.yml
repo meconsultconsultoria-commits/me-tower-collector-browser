@@ -1,0 +1,29 @@
+name: Coleta ME Tower
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm install
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run collect
+        env:
+          RASTRO_USER: ${{ secrets.RASTRO_USER }}
+          RASTRO_PASSWORD: ${{ secrets.RASTRO_PASSWORD }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          ME_TOWER_SECRET: ${{ secrets.ME_TOWER_SECRET }}
