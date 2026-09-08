@@ -16,17 +16,20 @@ try {
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.locator('input[name$=":username"]').fill(process.env.RASTRO_USER);
   await page.locator('input[name$=":pass"]').fill(process.env.RASTRO_PASSWORD);
-  await Promise.all([
-    page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {}),
-    page.locator('input[name$=":logarPortal"]').click(),
-  ]);
+  await page.locator('input[name$=":logarPortal"]').click();
+  await page.waitForTimeout(7000);
+  const afterLoginTitle = await page.title();
+  const afterLoginUrl = page.url();
+  console.log(`Após login: ${afterLoginTitle}; ${afterLoginUrl}`);
+  if (/login/i.test(afterLoginTitle) || /loginApp\.seam/i.test(afterLoginUrl)) {
+    throw new Error("O Rastro Seguro permaneceu na tela de login. Verifique as credenciais ou eventual bloqueio do portal.");
+  }
 
   await page.goto(MAP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForFunction(
-    () => document.documentElement.innerHTML.includes("registerCar("),
-    undefined,
-    { timeout: 60000 }
-  );
+  await page.waitForFunction(() => document.documentElement.innerHTML.includes("registerCar("), undefined, { timeout: 60000 })
+    .catch(async () => {
+      throw new Error(`Mapa sem veículos; título: ${await page.title()}; URL: ${page.url()}`);
+    });
 
   const html = await page.content();
   const vehicles = parseVehicles(html);
