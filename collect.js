@@ -25,16 +25,17 @@ try {
     throw new Error("O Rastro Seguro permaneceu na tela de login. Verifique as credenciais ou eventual bloqueio do portal.");
   }
 
-  await page.goto(MAP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForFunction(() => document.documentElement.innerHTML.includes("registerCar("), undefined, { timeout: 60000 })
+  const mapPage = await context.newPage();
+  await mapPage.goto(MAP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await mapPage.waitForFunction(() => document.documentElement.innerHTML.includes("registerCar("), undefined, { timeout: 60000 })
     .catch(async () => {
-      throw new Error(`Mapa sem veículos; título: ${await page.title()}; URL: ${page.url()}`);
+      throw new Error(`Mapa sem veículos; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
     });
 
-  const html = await page.content();
+  const html = await mapPage.content();
   const vehicles = parseVehicles(html);
   if (vehicles.length < 250) {
-    throw new Error(`Frota incompleta: ${vehicles.length}; título: ${await page.title()}; URL: ${page.url()}`);
+    throw new Error(`Frota incompleta: ${vehicles.length}; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
   }
 
   const payload = { collectedAt: new Date().toISOString(), vehicles };
