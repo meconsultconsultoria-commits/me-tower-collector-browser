@@ -13,16 +13,32 @@ const context = await browser.newContext({ locale: "pt-BR", timezoneId: "America
 const page = await context.newPage();
 
 try {
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.locator('input[name$=":username"]').fill(process.env.RASTRO_USER);
-  await page.locator('input[name$=":pass"]').fill(process.env.RASTRO_PASSWORD);
-  await page.locator('input[name$=":logarPortal"]').click();
-  await page.waitForTimeout(7000);
-  const afterLoginTitle = await page.title();
-  const afterLoginUrl = page.url();
-  console.log(`Após login: ${afterLoginTitle}; ${afterLoginUrl}`);
-  if (/login/i.test(afterLoginTitle) || /loginApp\.seam/i.test(afterLoginUrl)) {
-    throw new Error("O Rastro Seguro permaneceu na tela de login. Verifique as credenciais ou eventual bloqueio do portal.");
+  let authenticated = false;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.locator('input[name$=":username"]').fill(process.env.RASTRO_USER);
+    await page.locator('input[name$=":pass"]').fill(process.env.RASTRO_PASSWORD);
+    await page.locator('input[name$=":logarPortal"]').click();
+    await page.waitForTimeout(7000);
+
+    const afterLoginTitle = await page.title();
+    const afterLoginUrl = page.url();
+    const stillOnLogin = /login/i.test(afterLoginTitle) || /loginApp\.seam/i.test(afterLoginUrl);
+    console.log(`Login RastroSeguro — tentativa ${attempt}/2: ${stillOnLogin ? "não autenticou" : "autenticado"}; ${afterLoginTitle}; ${afterLoginUrl}`);
+
+    if (!stillOnLogin) {
+      authenticated = true;
+      break;
+    }
+
+    if (attempt < 2) {
+      console.warn("Primeira tentativa de login falhou. Nova tentativa automática em 3 segundos.");
+      await page.waitForTimeout(3000);
+    }
+  }
+
+  if (!authenticated) {
+    throw new Error("O Rastro Seguro permaneceu na tela de login após 2 tentativas. Verifique as credenciais ou eventual bloqueio do portal.");
   }
 
   const mapPage = await context.newPage();
