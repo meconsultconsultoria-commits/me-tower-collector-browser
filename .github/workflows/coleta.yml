@@ -10,7 +10,7 @@ concurrency:
 jobs:
   coletar:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -22,9 +22,12 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
+      - run: node --test
+
       - run: npm run collect
         env:
           RASTRO_USER: ${{ secrets.RASTRO_USER }}
           RASTRO_PASSWORD: ${{ secrets.RASTRO_PASSWORD }}
           WORKER_URL: ${{ secrets.WORKER_URL }}
           ME_TOWER_SECRET: ${{ secrets.ME_TOWER_SECRET }}
+

@@ -1,7 +1,6 @@
 import { chromium } from "playwright";
 
-const LOGIN_URL = "https://rastroseguro.1gps.com.br/apps/loginApp.seam";
-const MAP_URL = "https://rastroseguro.1gps.com.br/system/track/mapSimpleCar.seam";
+import { collectWithFailover } from "./failover.js";
 
 const required = ["RASTRO_USER", "RASTRO_PASSWORD", "WORKER_URL", "ME_TOWER_SECRET"];
 for (const key of required) {
@@ -9,52 +8,62 @@ for (const key of required) {
 }
 
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ locale: "pt-BR", timezoneId: "America/Sao_Paulo" });
-const page = await context.newPage();
-
 try {
-  let authenticated = false;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.locator('input[name$=":username"]').fill(process.env.RASTRO_USER);
-    await page.locator('input[name$=":pass"]').fill(process.env.RASTRO_PASSWORD);
-    await page.locator('input[name$=":logarPortal"]').click();
-    await page.waitForTimeout(7000);
+  const selected = await collectWithFailover(async (origin) => {
+    const context = await browser.newContext({ locale: "pt-BR", timezoneId: "America/Sao_Paulo" });
+    context.setDefaultTimeout(30000);
+    const page = await context.newPage();
+    const LOGIN_URL = `${origin}/apps/loginApp.seam`;
+    const MAP_URL = `${origin}/system/track/mapSimpleCar.seam`;
+    try {
+      let authenticated = false;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const loginResponse = await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+        if (!loginResponse?.ok()) throw new Error("login_http_error");
+        await page.locator('input[name$=":username"]').fill(process.env.RASTRO_USER);
+        await page.locator('input[name$=":pass"]').fill(process.env.RASTRO_PASSWORD);
+        await page.locator('input[name$=":logarPortal"]').click();
+        await page.waitForTimeout(7000);
 
-    const afterLoginTitle = await page.title();
-    const afterLoginUrl = page.url();
-    const stillOnLogin = /login/i.test(afterLoginTitle) || /loginApp\.seam/i.test(afterLoginUrl);
-    console.log(`Login RastroSeguro — tentativa ${attempt}/2: ${stillOnLogin ? "não autenticou" : "autenticado"}; ${afterLoginTitle}; ${afterLoginUrl}`);
+        const afterLoginTitle = await page.title();
+        const afterLoginUrl = page.url();
+        const stillOnLogin = /login/i.test(afterLoginTitle) || /loginApp\.seam/i.test(afterLoginUrl);
+        console.log(`Login RastroSeguro — tentativa ${attempt}/2: ${stillOnLogin ? "não autenticou" : "autenticado"}`);
 
-    if (!stillOnLogin) {
-      authenticated = true;
-      break;
-    }
+        if (!stillOnLogin) {
+          authenticated = true;
+          break;
+        }
 
-    if (attempt < 2) {
-      console.warn("Primeira tentativa de login falhou. Nova tentativa automática em 3 segundos.");
-      await page.waitForTimeout(3000);
-    }
-  }
+        if (attempt < 2) {
+          console.warn("Primeira tentativa de login falhou. Nova tentativa automática em 3 segundos.");
+          await page.waitForTimeout(3000);
+        }
+      }
 
-  if (!authenticated) {
-    throw new Error("O Rastro Seguro permaneceu na tela de login após 2 tentativas. Verifique as credenciais ou eventual bloqueio do portal.");
-  }
+      if (!authenticated) {
+        throw new Error("O Rastro Seguro permaneceu na tela de login após 2 tentativas. Verifique as credenciais ou eventual bloqueio do portal.");
+      }
 
-  const mapPage = await context.newPage();
-  await mapPage.goto(MAP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await mapPage.waitForFunction(() => document.documentElement.innerHTML.includes("registerCar("), undefined, { timeout: 60000 })
-    .catch(async () => {
-      throw new Error(`Mapa sem veículos; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
-    });
+      const mapPage = await context.newPage();
+      const mapResponse = await mapPage.goto(MAP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+      if (!mapResponse?.ok()) throw new Error("map_http_error");
+      await mapPage.waitForFunction(() => document.documentElement.innerHTML.includes("registerCar("), undefined, { timeout: 60000 })
+        .catch(async () => {
+          throw new Error(`Mapa sem veículos; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
+        });
 
-  const html = await mapPage.content();
-  const vehicles = parseVehicles(html);
-  if (vehicles.length < 250) {
-    throw new Error(`Frota incompleta: ${vehicles.length}; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
-  }
+      const html = await mapPage.content();
+      const vehicles = parseVehicles(html);
+      if (vehicles.length < 250) {
+        throw new Error(`Frota incompleta: ${vehicles.length}; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
+      }
 
-  const payload = { collectedAt: new Date().toISOString(), vehicles };
+    return vehicles;
+    } finally { await context.close(); }
+  });
+  const { vehicles, source, contingency } = selected;
+  const payload = { collectedAt: new Date().toISOString(), vehicles, source, contingency };
   const response = await fetch(`${process.env.WORKER_URL.replace(/\/$/, "")}/ingest`, {
     method: "POST",
     headers: {
@@ -62,6 +71,7 @@ try {
       "content-type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30000),
   });
   const result = await response.text();
   if (!response.ok) throw new Error(`Worker ${response.status}: ${result}`);
@@ -146,3 +156,4 @@ function toIso(brDate) {
   const m = brDate.match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
   return m ? `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}-03:00` : brDate;
 }
+
