@@ -46,6 +46,24 @@ try {
       }
 
       const label=origin.includes(".1gps.")?"1GPS":"2GPS";
+      async function readMarkerFleet(mapPage) {
+        await mapPage.waitForFunction(()=>document.querySelectorAll('.leaflet-marker-icon').length>=250,undefined,{timeout:25000}).catch(()=>{});
+        const markers=mapPage.locator('.leaflet-marker-icon');
+        const names=[...new Set((await markers.allTextContents()).map(v=>v.trim()).filter(v=>/\b[A-Z]{3}\d[A-Z0-9]\d{2}$/i.test(v)))];
+        if(names.length<250)return null;
+        const fleet=new Map(), deadline=Date.now()+100000;
+        for(const name of names){
+          if(Date.now()>=deadline)break;
+          try {
+            await markers.filter({hasText:name}).first().dispatchEvent('click',{}, {timeout:350});
+            const popup=mapPage.locator('.leaflet-popup-content').filter({hasText:name}).first();
+            const vehicle=parseMarkerPopup(await popup.innerText({timeout:450}),name);
+            if(vehicle)fleet.set(vehicle.plate,vehicle);
+          } catch { /* A marker may disappear as the tracker refreshes. */ }
+        }
+        console.log(`[${label}] marcadores: ${names.length} identificados; ${fleet.size} posições válidas.`);
+        return fleet.size>=250?[...fleet.values()]:null;
+      }
       async function readFleet(mapPage, view) {
         const deadline=Date.now()+45000;
         let count=0;
@@ -73,7 +91,7 @@ try {
           const login=/loginApp\.seam/i.test(new URL(page.url()).pathname);
           console.log(`[${label}] ${view}: HTTP ${response?.status()??"sem resposta"}; retorno ao login: ${login?"sim":"não"}.`);
           if(!response?.ok()||login)continue;
-          const fleet=await readFleet(page,view);
+          const fleet=(view==="visão geral" ? await readMarkerFleet(page) : null) || await readFleet(page,view);
           if(fleet)return fleet;
         } catch(error) {
           console.warn(`[${label}] ${view}: ${error?.name==="TimeoutError"?"tempo limite":"falha ao ler a página"}.`);
@@ -177,3 +195,18 @@ function toIso(brDate) {
   return m ? `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}-03:00` : brDate;
 }
 
+
+function parseMarkerPopup(text,name){
+  const plate=name.match(/\b([A-Z]{3}\d[A-Z0-9]\d{2})$/i)?.[1]?.toUpperCase();
+  const shown=text.match(/Veículo:\s*([^\n]+)/i)?.[1]?.trim();
+  const date=text.match(/Data Posição:\s*(\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2})/i)?.[1];
+  const coords=text.match(/Lat\s*\/\s*Long\s*:\s*(-?\d+\.\d+)\s+(-?\d+\.\d+)/i);
+  if(!plate||shown!==name||!date||!coords)return null;
+  const positionAt=toIso(date),latitude=Number(coords[1]),longitude=Number(coords[2]);
+  if(!Number.isFinite(Date.parse(positionAt))||Math.abs(latitude)>90||Math.abs(longitude)>180||(latitude===0&&longitude===0))return null;
+  return {plate,fleetNumber:name.match(/^\d{4,6}(?=\s)/)?.[0]||plate,trackerName:name,
+    trackerId:text.match(/Dispositivo:\s*(\d+)/i)?.[1]||null,positionAt,latitude,longitude,
+    speed:Number(text.match(/Velocidade:\s*(\d+(?:[.,]\d+)?)/i)?.[1]?.replace(',','.'))||0,
+    event:text.match(/(?:^|\n)Evento:\s*([^\n]+)/i)?.[1]?.trim()||'',
+    currentLocation:text.match(/Localização:\s*([^\n]+)/i)?.[1]?.trim()||'SEM LOCALIZAÇÃO'};
+}
