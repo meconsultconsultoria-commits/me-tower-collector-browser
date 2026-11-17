@@ -46,17 +46,28 @@ try {
       }
 
       const mapPage = await context.newPage();
-      const mapResponse = await mapPage.goto(MAP_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-      if (!mapResponse?.ok()) throw new Error("map_http_error");
-      await mapPage.waitForFunction(() => document.documentElement.innerHTML.includes("registerCar("), undefined, { timeout: 60000 })
-        .catch(async () => {
-          throw new Error(`Mapa sem veículos; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
-        });
-
-      const html = await mapPage.content();
-      const vehicles = parseVehicles(html);
+      const label=origin.includes(".1gps.")?"1GPS":"2GPS";
+      let mapResponse;
+      try {
+        mapResponse=await mapPage.goto(MAP_URL,{waitUntil:"domcontentloaded",timeout:60000});
+      } catch(error) {
+        console.warn(`[${label}] Mapa: navegação ${error?.name==="TimeoutError"?"excedeu 60 s":"falhou"}.`);
+        throw error;
+      }
+      const returnedToLogin=/loginApp\.seam/i.test(new URL(mapPage.url()).pathname);
+      console.log(`[${label}] Mapa: HTTP ${mapResponse?.status()??"sem resposta"}; voltou ao login: ${returnedToLogin?"sim":"não"}.`);
+      if(!mapResponse?.ok()||returnedToLogin)throw new Error("map_http_or_login_error");
+      let markerFound=true;
+      try {
+        await mapPage.waitForFunction(()=>document.documentElement.innerHTML.includes("registerCar("),undefined,{timeout:60000});
+      } catch {
+        markerFound=false;
+      }
+      const html=await mapPage.content();
+      const vehicles=parseVehicles(html);
+      console.log(`[${label}] Mapa: marcador ${markerFound||html.includes("registerCar(")?"presente":"ausente após 60 s"}; veículos lidos: ${vehicles.length} (mínimo: 250).`);
       if (vehicles.length < 250) {
-        throw new Error(`Frota incompleta: ${vehicles.length}; título: ${await mapPage.title()}; URL: ${mapPage.url()}`);
+        throw new Error("incomplete_fleet");
       }
 
     return vehicles;
