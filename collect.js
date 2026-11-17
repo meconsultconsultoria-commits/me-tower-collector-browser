@@ -45,32 +45,41 @@ try {
         throw new Error("O Rastro Seguro permaneceu na tela de login após 2 tentativas. Verifique as credenciais ou eventual bloqueio do portal.");
       }
 
-      const mapPage = await context.newPage();
       const label=origin.includes(".1gps.")?"1GPS":"2GPS";
-      let mapResponse;
-      try {
-        mapResponse=await mapPage.goto(MAP_URL,{waitUntil:"domcontentloaded",timeout:60000});
-      } catch(error) {
-        console.warn(`[${label}] Mapa: navegação ${error?.name==="TimeoutError"?"excedeu 60 s":"falhou"}.`);
-        throw error;
+      async function readFleet(mapPage, view) {
+        const deadline=Date.now()+45000;
+        let count=0;
+        do {
+          for(const frame of mapPage.frames()) {
+            try {
+              if(new URL(frame.url()).origin!==origin)continue;
+              const html=await frame.content();
+              const vehicles=[...new Map(parseVehicles(html).filter(v=>v.plate&&Number.isFinite(Date.parse(v.positionAt))&&Number.isFinite(v.latitude)&&Number.isFinite(v.longitude)).map(v=>[v.plate,v])).values()];
+              count=Math.max(count,vehicles.length);
+              if(vehicles.length>=250){
+                console.log(`[${label}] ${view}: ${vehicles.length} veículos válidos.`);
+                return vehicles;
+              }
+            } catch { /* A frame may be replaced while the portal loads. */ }
+          }
+          await mapPage.waitForTimeout(1000);
+        } while(Date.now()<deadline);
+        console.warn(`[${label}] ${view}: ${count} veículos válidos (mínimo: 250).`);
+        return null;
       }
-      const returnedToLogin=/loginApp\.seam/i.test(new URL(mapPage.url()).pathname);
-      console.log(`[${label}] Mapa: HTTP ${mapResponse?.status()??"sem resposta"}; voltou ao login: ${returnedToLogin?"sim":"não"}.`);
-      if(!mapResponse?.ok()||returnedToLogin)throw new Error("map_http_or_login_error");
-      let markerFound=true;
-      try {
-        await mapPage.waitForFunction(()=>document.documentElement.innerHTML.includes("registerCar("),undefined,{timeout:60000});
-      } catch {
-        markerFound=false;
+      for(const [url,view] of [[origin+"/","visão geral"],[MAP_URL,"mapa anterior"]]){
+        try {
+          const response=await page.goto(url,{waitUntil:"domcontentloaded",timeout:30000});
+          const login=/loginApp\.seam/i.test(new URL(page.url()).pathname);
+          console.log(`[${label}] ${view}: HTTP ${response?.status()??"sem resposta"}; retorno ao login: ${login?"sim":"não"}.`);
+          if(!response?.ok()||login)continue;
+          const fleet=await readFleet(page,view);
+          if(fleet)return fleet;
+        } catch(error) {
+          console.warn(`[${label}] ${view}: ${error?.name==="TimeoutError"?"tempo limite":"falha ao ler a página"}.`);
+        }
       }
-      const html=await mapPage.content();
-      const vehicles=parseVehicles(html);
-      console.log(`[${label}] Mapa: marcador ${markerFound||html.includes("registerCar(")?"presente":"ausente após 60 s"}; veículos lidos: ${vehicles.length} (mínimo: 250).`);
-      if (vehicles.length < 250) {
-        throw new Error("incomplete_fleet");
-      }
-
-    return vehicles;
+      throw new Error("incomplete_fleet");
     } finally { await context.close(); }
   });
   const { vehicles, source, contingency } = selected;
