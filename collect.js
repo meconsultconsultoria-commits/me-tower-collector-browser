@@ -14,7 +14,6 @@ try {
     context.setDefaultTimeout(30000);
     const page = await context.newPage();
     const LOGIN_URL = `${origin}/apps/loginApp.seam`;
-    const MAP_URL = `${origin}/system/track/mapSimpleCar.seam`;
     try {
       let authenticated = false;
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -50,7 +49,7 @@ try {
         await mapPage.waitForFunction(()=>document.querySelectorAll('.leaflet-marker-icon').length>=250,undefined,{timeout:25000}).catch(()=>{});
         const markers=mapPage.locator('.leaflet-marker-icon');
         const names=[...new Set((await markers.allTextContents()).map(v=>v.trim()).filter(v=>/\b[A-Z]{3}\d[A-Z0-9]\d{2}$/i.test(v)))];
-        if(names.length<250)return null;
+        if(names.length<250){console.warn(`[${label}] marcadores: ${names.length} identificados; mínimo: 250.`);return null;}
         const fleet=new Map(), deadline=Date.now()+100000;
         for(const name of names){
           if(Date.now()>=deadline)break;
@@ -64,40 +63,13 @@ try {
         console.log(`[${label}] marcadores: ${names.length} identificados; ${fleet.size} posições válidas.`);
         return fleet.size>=250?[...fleet.values()]:null;
       }
-      async function readFleet(mapPage, view) {
-        const deadline=Date.now()+45000;
-        let count=0;
-        do {
-          for(const frame of mapPage.frames()) {
-            try {
-              if(new URL(frame.url()).origin!==origin)continue;
-              const html=await frame.content();
-              const vehicles=[...new Map(parseVehicles(html).filter(v=>v.plate&&Number.isFinite(Date.parse(v.positionAt))&&Number.isFinite(v.latitude)&&Number.isFinite(v.longitude)).map(v=>[v.plate,v])).values()];
-              count=Math.max(count,vehicles.length);
-              if(vehicles.length>=250){
-                console.log(`[${label}] ${view}: ${vehicles.length} veículos válidos.`);
-                return vehicles;
-              }
-            } catch { /* A frame may be replaced while the portal loads. */ }
-          }
-          await mapPage.waitForTimeout(1000);
-        } while(Date.now()<deadline);
-        console.warn(`[${label}] ${view}: ${count} veículos válidos (mínimo: 250).`);
-        return null;
-      }
-      for(const [url,view] of [[origin+"/","visão geral"],[MAP_URL,"mapa anterior"]]){
-        try {
-          const response=await page.goto(url,{waitUntil:"domcontentloaded",timeout:30000});
-          const login=/loginApp\.seam/i.test(new URL(page.url()).pathname);
-          console.log(`[${label}] ${view}: HTTP ${response?.status()??"sem resposta"}; retorno ao login: ${login?"sim":"não"}.`);
-          if(!response?.ok()||login)continue;
-          const fleet=(view==="visão geral" ? await readMarkerFleet(page) : null) || await readFleet(page,view);
-          if(fleet)return fleet;
-        } catch(error) {
-          console.warn(`[${label}] ${view}: ${error?.name==="TimeoutError"?"tempo limite":"falha ao ler a página"}.`);
-        }
-      }
-      throw new Error("incomplete_fleet");
+      const response=await page.goto(origin+"/",{waitUntil:"domcontentloaded",timeout:30000});
+      const login=/loginApp\.(?:seam|html)/i.test(new URL(page.url()).pathname);
+      console.log("["+label+"] visão geral: HTTP "+(response?.status()??"sem resposta")+"; retorno ao login: "+(login?"sim":"não")+".");
+      if(!response?.ok()||login)throw new Error("map_http_or_login_error");
+      const fleet=await readMarkerFleet(page);
+      if(!fleet)throw new Error("incomplete_fleet");
+      return fleet;
     } finally { await context.close(); }
   });
   const { vehicles, source, contingency } = selected;
@@ -116,78 +88,6 @@ try {
   console.log(`Coleta concluída: ${vehicles.length} veículos. ${result}`);
 } finally {
   await browser.close();
-}
-
-function parseVehicles(html) {
-  return extractCalls(html, "registerCar").map(splitArgs).filter((a) => a.length > 11).map((a) => {
-    const trackerName = value(a[1]);
-    const parts = trackerName.trim().split(/\s+/);
-    const plate = parts.at(-1) || trackerName;
-    return {
-      fleetNumber: /^\d{4,6}$/.test(parts[0] || "") ? parts[0] : plate,
-      plate,
-      trackerName,
-      trackerId: value(a[11]),
-      positionAt: toIso(value(a[2])),
-      ignition: value(a[3]).includes("key_ok"),
-      speed: Number(value(a[4])) || 0,
-      event: value(a[5]),
-      currentLocation: value(a[6]) || "SEM LOCALIZAÇÃO",
-      latitude: Number(value(a[8])),
-      longitude: Number(value(a[9])),
-    };
-  });
-}
-
-function extractCalls(source, name) {
-  const out = [], needle = `${name}(`;
-  let pos = 0;
-  while ((pos = source.indexOf(needle, pos)) >= 0) {
-    let i = pos + needle.length, depth = 1, quote = "", escaped = false;
-    for (; i < source.length; i++) {
-      const ch = source[i];
-      if (quote) {
-        if (escaped) escaped = false;
-        else if (ch === "\\") escaped = true;
-        else if (ch === quote) quote = "";
-        continue;
-      }
-      if (ch === '"' || ch === "'") quote = ch;
-      else if (ch === "(") depth++;
-      else if (ch === ")" && --depth === 0) break;
-    }
-    if (depth === 0) out.push(source.slice(pos + needle.length, i));
-    pos = i + 1;
-  }
-  return out;
-}
-
-function splitArgs(call) {
-  const args = []; let current = "", quote = "", escaped = false, depth = 0;
-  for (const ch of call) {
-    if (quote) {
-      current += ch;
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === quote) quote = "";
-      continue;
-    }
-    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
-    if ("([{<".includes(ch)) depth++;
-    if (")]}>".includes(ch)) depth--;
-    if (ch === "," && depth === 0) { args.push(current.trim()); current = ""; }
-    else current += ch;
-  }
-  args.push(current.trim());
-  return args;
-}
-
-function value(raw = "") {
-  const text = raw.trim();
-  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-    return text.slice(1, -1).replace(/\\(["'\\])/g, "$1");
-  }
-  return text;
 }
 
 function toIso(brDate) {
