@@ -108,5 +108,5 @@ function parseMarkerPopup(text,name){
     trackerId:text.match(/Dispositivo:\s*(\d+)/i)?.[1]||null,positionAt,latitude,longitude,
     speed:Number(text.match(/Velocidade:\s*(\d+(?:[.,]\d+)?)/i)?.[1]?.replace(',','.'))||0,
     event:text.match(/(?:^|\n)Evento:\s*([^\n]+)/i)?.[1]?.trim()||'',
-    currentLocation:text.match(/Localização:\s*([^\n]+)/i)?.[1]?.trim()||'SEM LOCALIZAÇÃO'};
+    currentLocation:text.match(/Localização:\s*([\s\S]*?)(?=\s*Lat\s*\/\s*Long\s*:|$)/i)?.[1]?.replace(/\s+/g,' ').trim()||'SEM LOCALIZAÇÃO'};
 }
