@@ -11,6 +11,14 @@ jobs:
   coletar:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright:v1.55.0-noble
+      options: --ipc=host
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      npm_config_fetch_retries: "3"
+      npm_config_fetch_retry_mintimeout: "2000"
+      npm_config_fetch_retry_maxtimeout: "15000"
     steps:
       - uses: actions/checkout@v4
 
@@ -18,10 +26,13 @@ jobs:
         with:
           node-version: "22"
 
-      - run: npm install
+      - name: Install application dependencies
+        run: npm install --no-audit --no-fund
+        timeout-minutes: 2
 
-      - run: npx playwright install --with-deps chromium
-        timeout-minutes: 3
+      - name: Verify preinstalled Chromium
+        run: node --input-type=module -e 'import { chromium } from "playwright"; const browser = await chromium.launch({ headless:true }); console.log("Chromium ready:", browser.version()); await browser.close();'
+        timeout-minutes: 1
 
       - run: node --test
 
